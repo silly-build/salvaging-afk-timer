@@ -1,0 +1,9 @@
+.gradle/
+build/
+.idea/
+out/
+*.class
+*.jar
+*.iml
+hs_err_pid*.log
+release-candidate.patch
