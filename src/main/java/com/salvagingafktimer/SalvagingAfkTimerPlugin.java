@@ -18,6 +18,7 @@ import java.util.StringJoiner;
 import javax.inject.Inject;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.DynamicObject;
 import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
@@ -89,6 +90,10 @@ public class SalvagingAfkTimerPlugin extends Plugin
     private static final long WRECK_SOONISH_MILLIS = 10_000L;
     private static final long WRECK_WARNING_MAX_MILLIS = 30_000L;
     private static final int SALVAGE_RATE_WINDOW_SECONDS = 600;
+    private static final String STARTUP_MESSAGE =
+            "Salvaging AFK Timer active - please use a designated salvaging world " +
+                    "for remotely accurate shipwreck timers!";
+    private static final String STARTUP_MESSAGE_COLOR = "1e5aa8";
     private static final Set<Integer> BOAT_WORLD_ENTITY_TYPES = Set.of(1, 2, 3);
 
     private static final Set<Integer> SAILING_SALVAGING_ANIMATION_IDS = Set.of(
@@ -172,7 +177,6 @@ public class SalvagingAfkTimerPlugin extends Plugin
     private boolean sortingSessionActive;
     private long sortingFinishAtMillis;
 
-    private boolean wreckTimerCalibratedThisSession;
     private WreckKey trackedSalvagingWreckKey;
     private static final long FACILITY_UNDIM_MILLIS = 3_000L;
 
@@ -216,6 +220,8 @@ public class SalvagingAfkTimerPlugin extends Plugin
     private int lastMenuIdentifier = -1;
     private String lastSignal = "Waiting for data";
     private long lastSignalAtMillis;
+    private int lastObservedWorld = -1;
+    private boolean startupMessageShown;
 
     @Provides
     SalvagingAfkTimerConfig provideConfig(ConfigManager configManager)
@@ -227,12 +233,14 @@ public class SalvagingAfkTimerPlugin extends Plugin
     protected void startUp()
     {
         dimmerEnabled = true;
+        startupMessageShown = false;
         resetTransientState();
 
         overlayManager.add(dimmerOverlay);
         overlayManager.add(statusOverlay);
         overlayManager.add(minimalistOverlay);
         keyManager.registerKeyListener(toggleHotkeyListener);
+        showStartupMessageIfReady();
 
         log.info("Salvaging AFK Timer started");
     }
@@ -254,6 +262,14 @@ public class SalvagingAfkTimerPlugin extends Plugin
     public void onGameStateChanged(GameStateChanged event)
     {
         GameState state = event.getGameState();
+
+        if (state == GameState.LOGGED_IN)
+        {
+            resetWreckCalibrationIfWorldChanged();
+            showStartupMessageIfReady();
+            return;
+        }
+
         if (state == GameState.LOGIN_SCREEN ||
                 state == GameState.HOPPING ||
                 state == GameState.CONNECTION_LOST)
@@ -266,6 +282,8 @@ public class SalvagingAfkTimerPlugin extends Plugin
     public void onGameTick(GameTick event)
     {
         tickCounter++;
+        resetWreckCalibrationIfWorldChanged();
+        showStartupMessageIfReady();
 
         updatePlayerMovementAndAnimation();
         initializeInventoryIfNeeded();
@@ -713,17 +731,6 @@ public class SalvagingAfkTimerPlugin extends Plugin
                 ? null
                 : new WreckKey(tracked.type, tracked.location);
         setTrackedSalvagingWreck(nextKey);
-
-        if (tracked != null && !tracked.timerAnchoredToLocalSalvaging)
-        {
-            tracked.timerStartedAtMillis = System.currentTimeMillis();
-            tracked.timerAnchoredToLocalSalvaging = true;
-            tracked.timerStartReason = "local salvage start";
-            tracked.observedSpawnThisSession = true;
-            refreshWreckCalibrationLatch();
-            recordSignal("Anchored " + tracked.type.getDisplayName() +
-                    " wreck timer to local salvaging at " + formatPoint(tracked.location));
-        }
     }
 
     private void setTrackedSalvagingWreck(WreckKey key)
@@ -1343,11 +1350,14 @@ public class SalvagingAfkTimerPlugin extends Plugin
 
             if (active)
             {
-                observation.timerStartedAtMillis = now;
-                observation.timerAnchoredToLocalSalvaging = false;
-                observation.timerStartReason = source.equals("spawn")
-                        ? "spawn estimate"
-                        : "first-seen estimate";
+                /*
+                 * Finding an already-active wreck does not reveal when its
+                 * lifespan began. It remains uncalibrated until this exact
+                 * wreck is observed inactive and then becomes active.
+                 */
+                observation.timerStartedAtMillis = 0L;
+                observation.observedSpawnThisSession = false;
+                observation.timerStartReason = "awaiting observed spawn";
             }
             else
             {
@@ -1355,7 +1365,6 @@ public class SalvagingAfkTimerPlugin extends Plugin
             }
 
             addWreckObservation(key, observation);
-            refreshWreckCalibrationLatch();
             return;
         }
 
@@ -1366,7 +1375,6 @@ public class SalvagingAfkTimerPlugin extends Plugin
                 recordRespawnSample(type, now - observation.inactiveSinceMillis);
             }
             observation.timerStartedAtMillis = now;
-            observation.timerAnchoredToLocalSalvaging = false;
             observation.observedSpawnThisSession = true;
             observation.timerStartReason = "observed spawn";
             observation.inactiveSinceMillis = 0L;
@@ -1375,7 +1383,6 @@ public class SalvagingAfkTimerPlugin extends Plugin
         else if (!active && observation.active)
         {
             observation.timerStartedAtMillis = 0L;
-            observation.timerAnchoredToLocalSalvaging = false;
             observation.inactiveSinceMillis = now;
             observation.timerStartReason = "inactive";
             recordSignal(type.getDisplayName() + " wreck became inactive at " + formatPoint(location));
@@ -1386,32 +1393,6 @@ public class SalvagingAfkTimerPlugin extends Plugin
         observation.present = true;
         observation.seenInLastScan = true;
         observation.lastSeenTick = tickCounter;
-        refreshWreckCalibrationLatch();
-    }
-
-    private void refreshWreckCalibrationLatch()
-    {
-        if (wreckTimerCalibratedThisSession)
-        {
-            return;
-        }
-
-        List<WreckObservation> nearest = getNearestWreckObservations(2);
-        if (nearest.size() < 2)
-        {
-            return;
-        }
-
-        for (WreckObservation observation : nearest)
-        {
-            if (!observation.observedSpawnThisSession)
-            {
-                return;
-            }
-        }
-
-        wreckTimerCalibratedThisSession = true;
-        recordSignal("Wreck timers calibrated for this session");
     }
 
     private void recordRespawnSample(ShipwreckType type, long durationMillis)
@@ -1828,7 +1809,6 @@ public class SalvagingAfkTimerPlugin extends Plugin
         salvagingSessionActive = false;
         sortingSessionActive = false;
         sortingFinishAtMillis = 0L;
-        wreckTimerCalibratedThisSession = false;
         trackedSalvagingWreckKey = null;
         salvagingDimmerSuppressedUntilMillis = 0L;
         dimmerSortingArmed = true;
@@ -1851,6 +1831,60 @@ public class SalvagingAfkTimerPlugin extends Plugin
         lastMenuIdentifier = -1;
         lastSignal = "Waiting for data";
         lastSignalAtMillis = 0L;
+        lastObservedWorld = -1;
+    }
+
+    private void showStartupMessageIfReady()
+    {
+        if (startupMessageShown ||
+                client.getGameState() != GameState.LOGGED_IN ||
+                client.getLocalPlayer() == null)
+        {
+            return;
+        }
+
+        Widget welcomeScreen = client.getWidget(InterfaceID.WelcomeScreen.MOTW);
+        if (welcomeScreen != null && !welcomeScreen.isHidden())
+        {
+            return;
+        }
+
+        client.addChatMessage(
+                ChatMessageType.GAMEMESSAGE,
+                "",
+                "<col=" + STARTUP_MESSAGE_COLOR + ">" + STARTUP_MESSAGE + "</col>",
+                null
+        );
+        startupMessageShown = true;
+    }
+
+    private void resetWreckCalibrationIfWorldChanged()
+    {
+        if (client.getGameState() != GameState.LOGGED_IN)
+        {
+            return;
+        }
+
+        int currentWorld = client.getWorld();
+        if (currentWorld <= 0)
+        {
+            return;
+        }
+
+        if (lastObservedWorld != -1 && currentWorld != lastObservedWorld)
+        {
+            resetWreckCalibrationState();
+            recordSignal("World changed; shipwreck timers returned to calibrating");
+        }
+
+        lastObservedWorld = currentWorld;
+    }
+
+    private void resetWreckCalibrationState()
+    {
+        clearWreckObservations();
+        respawnSamplesByType.clear();
+        trackedSalvagingWreckKey = null;
     }
 
     private void clearWreckObservations()
@@ -2052,7 +2086,7 @@ public class SalvagingAfkTimerPlugin extends Plugin
         {
             return 0L;
         }
-        if (!observation.timerAnchoredToLocalSalvaging)
+        if (!observation.observedSpawnThisSession)
         {
             return -1L;
         }
@@ -2105,7 +2139,21 @@ public class SalvagingAfkTimerPlugin extends Plugin
 
     public boolean isWreckTimerCalibrated()
     {
-        return wreckTimerCalibratedThisSession;
+        List<WreckObservation> nearest = getNearestWreckObservations(2);
+        if (nearest.size() < 2)
+        {
+            return false;
+        }
+
+        for (WreckObservation observation : nearest)
+        {
+            if (!observation.observedSpawnThisSession)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private long getPotentiallyNoWreckRemainingMillis()
@@ -2484,6 +2532,11 @@ public class SalvagingAfkTimerPlugin extends Plugin
             return "No nearby wrecks detected";
         }
 
+        if (!isWreckTimerCalibrated())
+        {
+            return "Calibrating";
+        }
+
         int sailingLevel = client.getBoostedSkillLevel(Skill.SAILING);
         long longestRemaining = -1L;
         for (WreckObservation observation : nearest)
@@ -2568,10 +2621,14 @@ public class SalvagingAfkTimerPlugin extends Plugin
                 status = "Active, requires level " + observation.type.getRequiredSailingLevel() +
                         " [id=" + observation.objectId + "]";
             }
+            else if (!observation.observedSpawnThisSession)
+            {
+                status = "Active, timer calibrating [id=" + observation.objectId + "]";
+            }
             else
             {
                 long remaining = getWreckRemainingMillis(observation);
-                status = formatDurationMillis(Math.max(0L, remaining)) + " est., " +
+                status = formatDurationMillis(Math.max(0L, remaining)) + ", " +
                         observation.timerStartReason + " [id=" + observation.objectId + "]";
             }
 
@@ -3015,7 +3072,6 @@ public class SalvagingAfkTimerPlugin extends Plugin
         private boolean seenInLastScan;
         private int objectId;
         private long timerStartedAtMillis;
-        private boolean timerAnchoredToLocalSalvaging;
         private boolean observedSpawnThisSession;
         private long inactiveSinceMillis;
         private long lastSeenTick;
