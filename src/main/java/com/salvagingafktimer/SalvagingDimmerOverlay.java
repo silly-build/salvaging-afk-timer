@@ -7,8 +7,8 @@ import java.awt.Rectangle;
 import java.awt.geom.Area;
 import javax.inject.Inject;
 import net.runelite.api.Client;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
-import net.runelite.api.widgets.WidgetInfo;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -29,7 +29,6 @@ public class SalvagingDimmerOverlay extends Overlay
 		this.client = client;
 		this.plugin = plugin;
 		this.config = config;
-
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
 		setPriority(PRIORITY_LOW);
@@ -120,15 +119,14 @@ public class SalvagingDimmerOverlay extends Overlay
 		return intersectVisibleBounds(viewport, canvasBounds);
 	}
 
-	@SuppressWarnings("deprecation")
 	private Rectangle findVisibleChatBounds(Rectangle canvasBounds)
 	{
 		Widget[] candidates = new Widget[]
-		{
-			client.getWidget(WidgetInfo.RESIZABLE_VIEWPORT_CHATBOX_PARENT),
-			client.getWidget(WidgetInfo.RESIZABLE_VIEWPORT_BOTTOM_LINE_CHATBOX_PARENT),
-			client.getWidget(WidgetInfo.CHATBOX_PARENT)
-		};
+				{
+						client.getWidget(InterfaceID.ToplevelOsrsStretch.CHAT_CONTAINER),
+						client.getWidget(InterfaceID.ToplevelPreEoc.CHAT_CONTAINER),
+						client.getWidget(InterfaceID.Chatbox.UNIVERSE)
+				};
 
 		for (Widget widget : candidates)
 		{
