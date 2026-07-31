@@ -243,7 +243,6 @@ public class SalvagingAfkTimerPlugin extends Plugin
         overlayManager.add(statusOverlay);
         overlayManager.add(minimalistOverlay);
         keyManager.registerKeyListener(toggleHotkeyListener);
-        showStartupMessageIfReady();
 
         log.info("Salvaging AFK Timer started");
     }
