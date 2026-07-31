@@ -83,12 +83,15 @@ public class SalvagingAfkTimerPlugin extends Plugin
     private static final int INVENTORY_SIZE = 28;
     private static final int SCENE_RESCAN_TICKS = 5;
     private static final int CARGO_ACTION_MAX_DELAY_TICKS = 4;
-    private static final int WRECK_FORGET_AFTER_TICKS = 3;
+    private static final int WRECK_FORGET_AFTER_TICKS = SCENE_RESCAN_TICKS * 2;
     private static final int MAX_RESPAWN_SAMPLES = 20;
     private static final int MIN_RATE_TICKS = 15;
     private static final int REQUIRED_SALVAGE_CALIBRATION_COUNT = 8;
     private static final long WRECK_SOONISH_MILLIS = 10_000L;
     private static final long WRECK_WARNING_MAX_MILLIS = 30_000L;
+    private static final long RESPAWN_ZERO_GRACE_MILLIS = 10_000L;
+    private static final String UNKNOWN_RESPAWN_ETA_TEXT =
+            "unlucky spawns, unknown ETA";
     private static final int SALVAGE_RATE_WINDOW_SECONDS = 600;
     private static final String STARTUP_MESSAGE =
             "Salvaging AFK Timer active - please use a designated salvaging world " +
@@ -721,11 +724,15 @@ public class SalvagingAfkTimerPlugin extends Plugin
             }
         }
 
-        WreckObservation tracked = getTrackedSalvagingWreck();
-        if (tracked == null || !activeWrecks.contains(tracked))
-        {
-            tracked = activeWrecks.isEmpty() ? null : activeWrecks.get(0);
-        }
+        /*
+         * With two active wrecks beside the boat, RuneLite does not expose
+         * which wreck the hook is actually using. Track a specific wreck only
+         * when exactly one usable local wreck is active. With two active, the
+         * ETA falls back to the time until neither local wreck is available.
+         */
+        WreckObservation tracked = activeWrecks.size() == 1
+                ? activeWrecks.get(0)
+                : null;
 
         WreckKey nextKey = tracked == null
                 ? null
@@ -1361,7 +1368,13 @@ public class SalvagingAfkTimerPlugin extends Plugin
             }
             else
             {
-                observation.inactiveSinceMillis = now;
+                /*
+                 * Discovering an existing stump does not tell us when that site
+                 * sank. Only an observed active-to-inactive transition can start
+                 * a pool-cycle estimate.
+                 */
+                observation.inactiveSinceMillis = 0L;
+                observation.timerStartReason = "inactive, sink time unknown";
             }
 
             addWreckObservation(key, observation);
@@ -2096,45 +2109,112 @@ public class SalvagingAfkTimerPlugin extends Plugin
 
     private String getZeroWreckRespawnText()
     {
-        long now = System.currentTimeMillis();
-        WreckObservation relevant = getTrackedSalvagingWreck();
-
-        if (relevant == null || relevant.active || relevant.inactiveSinceMillis <= 0L)
-        {
-            long shortestRemaining = Long.MAX_VALUE;
-            for (WreckObservation observation : getNearestWreckObservations(2))
-            {
-                if (observation.active || observation.inactiveSinceMillis <= 0L)
-                {
-                    continue;
-                }
-
-                long maximumRespawnMillis =
-                        observation.type.getAverageDurationSeconds() * 1000L;
-                long remaining = Math.max(
-                        0L,
-                        maximumRespawnMillis - (now - observation.inactiveSinceMillis)
-                );
-
-                if (remaining < shortestRemaining)
-                {
-                    shortestRemaining = remaining;
-                    relevant = observation;
-                }
-            }
-        }
-
-        if (relevant == null || relevant.inactiveSinceMillis <= 0L)
+        List<WreckObservation> workingPair = getNearestWreckObservations(2);
+        if (workingPair.isEmpty())
         {
             return "Respawn calibrating";
         }
 
-        long maximumRespawnMillis = relevant.type.getAverageDurationSeconds() * 1000L;
-        long remaining = Math.max(
-                0L,
-                maximumRespawnMillis - (now - relevant.inactiveSinceMillis)
-        );
-        return "Respawn in " + formatDurationMillis(remaining) + " max";
+        int sailingLevel = client.getBoostedSkillLevel(Skill.SAILING);
+        Set<ShipwreckType> workingPoolTypes = new HashSet<>();
+        Set<Integer> workingPlanes = new HashSet<>();
+        Set<Integer> workingWorldViewIds = new HashSet<>();
+        for (WreckObservation observation : workingPair)
+        {
+            if (sailingLevel >= observation.type.getRequiredSailingLevel())
+            {
+                workingPoolTypes.add(observation.type);
+                workingPlanes.add(observation.location.getPlane());
+                workingWorldViewIds.add(observation.worldViewId);
+            }
+        }
+
+        if (workingPoolTypes.isEmpty())
+        {
+            return "Respawn calibrating";
+        }
+
+        long now = System.currentTimeMillis();
+        long earliestFutureDeadline = Long.MAX_VALUE;
+        long latestExpiredDeadline = Long.MIN_VALUE;
+        boolean hasKnownPoolCycle = false;
+
+        /*
+         * The two nearest sites are the local working pair, but every observed
+         * site of the same tier, plane and world view contributes pool-cycle
+         * evidence. Recently missing observations remain usable until the stale
+         * cleanup window expires, protecting against a missed object event.
+         * In a mass world, each witnessed sink or spawn is treated as the
+         * beginning of another full-duration pool cycle.
+         */
+        for (WreckObservation observation : wrecks.values())
+        {
+            if (!workingPoolTypes.contains(observation.type) ||
+                    !workingPlanes.contains(observation.location.getPlane()) ||
+                    !workingWorldViewIds.contains(observation.worldViewId) ||
+                    sailingLevel < observation.type.getRequiredSailingLevel())
+            {
+                continue;
+            }
+
+            long cycleStartedAtMillis = -1L;
+            if (observation.active &&
+                    observation.observedSpawnThisSession &&
+                    observation.timerStartedAtMillis > 0L)
+            {
+                cycleStartedAtMillis = observation.timerStartedAtMillis;
+            }
+            else if (!observation.active && observation.inactiveSinceMillis > 0L)
+            {
+                /*
+                 * A witnessed sink causes another pool site to rise immediately.
+                 * Even when that replacement site is outside the visible scene,
+                 * the sink time gives us one estimated future turnover.
+                 */
+                cycleStartedAtMillis = observation.inactiveSinceMillis;
+            }
+
+            if (cycleStartedAtMillis <= 0L)
+            {
+                continue;
+            }
+
+            hasKnownPoolCycle = true;
+            long deadline = cycleStartedAtMillis +
+                    observation.type.getAverageDurationSeconds() * 1000L;
+
+            if (deadline > now)
+            {
+                earliestFutureDeadline = Math.min(
+                        earliestFutureDeadline,
+                        deadline
+                );
+            }
+            else
+            {
+                latestExpiredDeadline = Math.max(
+                        latestExpiredDeadline,
+                        deadline
+                );
+            }
+        }
+
+        if (earliestFutureDeadline != Long.MAX_VALUE)
+        {
+            return "Respawn in " +
+                    formatDurationMillis(earliestFutureDeadline - now) +
+                    " max";
+        }
+
+        if (latestExpiredDeadline != Long.MIN_VALUE &&
+                now - latestExpiredDeadline < RESPAWN_ZERO_GRACE_MILLIS)
+        {
+            return "Respawn in 0:00 max";
+        }
+
+        return hasKnownPoolCycle
+                ? UNKNOWN_RESPAWN_ETA_TEXT
+                : "Respawn calibrating";
     }
 
     public boolean isWreckTimerCalibrated()
@@ -2562,37 +2642,14 @@ public class SalvagingAfkTimerPlugin extends Plugin
         int sailingLevel = client.getBoostedSkillLevel(Skill.SAILING);
         for (WreckObservation observation : nearest)
         {
-            if (observation.active && sailingLevel >= observation.type.getRequiredSailingLevel())
+            if (observation.active &&
+                    sailingLevel >= observation.type.getRequiredSailingLevel())
             {
                 return "Now";
             }
         }
 
-        long shortestEstimate = Long.MAX_VALUE;
-        boolean hasEstimate = false;
-        long now = System.currentTimeMillis();
-        for (WreckObservation observation : nearest)
-        {
-            if (sailingLevel < observation.type.getRequiredSailingLevel())
-            {
-                continue;
-            }
-
-            long learnedRespawn = getLearnedRespawnMillis(observation.type);
-            if (learnedRespawn < 0L || observation.inactiveSinceMillis <= 0L)
-            {
-                continue;
-            }
-
-            long remaining = Math.max(0L,
-                    learnedRespawn - (now - observation.inactiveSinceMillis));
-            shortestEstimate = Math.min(shortestEstimate, remaining);
-            hasEstimate = true;
-        }
-
-        return hasEstimate
-                ? formatDurationMillis(shortestEstimate) + " learned est."
-                : "Learning from future spawns";
+        return getZeroWreckRespawnText();
     }
 
     public List<WreckDisplay> getNearestWrecks(int limit)
