@@ -39,7 +39,7 @@ public interface SalvagingAfkTimerConfig extends Config
     )
     default boolean toggleOnlyHidesDimmer()
     {
-        return false;
+        return true;
     }
 
     @ConfigSection(
@@ -71,7 +71,7 @@ public interface SalvagingAfkTimerConfig extends Config
     )
     default int dimmerOpacity()
     {
-        return 70;
+        return 50;
     }
 
     @ConfigItem(
@@ -163,7 +163,7 @@ public interface SalvagingAfkTimerConfig extends Config
     )
     default boolean showMovableTextOverlay()
     {
-        return true;
+        return false;
     }
 
     @ConfigItem(
@@ -175,7 +175,7 @@ public interface SalvagingAfkTimerConfig extends Config
     )
     default boolean showMinimalistTextBox()
     {
-        return false;
+        return true;
     }
 
     @ConfigItem(
@@ -248,7 +248,7 @@ public interface SalvagingAfkTimerConfig extends Config
     )
     default int etaTextSize()
     {
-        return 28;
+        return 25;
     }
 
     @Range(min = 12, max = 72)
@@ -316,7 +316,7 @@ public interface SalvagingAfkTimerConfig extends Config
     @ConfigItem(
             keyName = "statusTextAlignment",
             name = "Text alignment",
-            description = "Aligns every line within the fixed-width status block",
+            description = "Aligns text in both the movable and minimalist overlays",
             section = timerOverlaySection,
             position = 13
     )

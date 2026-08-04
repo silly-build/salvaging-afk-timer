@@ -1976,6 +1976,11 @@ public class SalvagingAfkTimerPlugin extends Plugin
         return currentAnimation;
     }
 
+    public boolean isCrystalExtractorDetectedForOverlay()
+    {
+        return boatSnapshot.crystalExtractor != null;
+    }
+
     public String getCrystalExtractorStatus()
     {
         GameObject extractor = boatSnapshot.crystalExtractor;

@@ -4,6 +4,12 @@ A configurable salvaging AFK timer and dimmer for cozy sailing gains.
 
 **For best results and most accurate shipwreck timings, please use this plugin on a dedicated salvaging world.**
 
+## Video demonstration
+
+[![Watch the Salvaging AFK Timer demonstration](https://img.youtube.com/vi/d2M_oOjN4pk/hqdefault.jpg)](https://www.youtube.com/watch?v=d2M_oOjN4pk)
+
+This displays a large preview image that opens the YouTube video when clicked.
+
 ## Features
 
 - Highly configurable text overlays displaying action progress ETAs, Crystal Extractor status, cargo capacity & local wreck tracking information.
