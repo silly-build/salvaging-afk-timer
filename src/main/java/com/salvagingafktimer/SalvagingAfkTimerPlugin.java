@@ -182,6 +182,8 @@ public class SalvagingAfkTimerPlugin extends Plugin
 
     private WreckKey trackedSalvagingWreckKey;
     private static final long FACILITY_UNDIM_MILLIS = 3_000L;
+    // Crewmates report salvage at least once a minute while working a hook.
+    private static final long CREW_SALVAGING_WINDOW_TICKS = 100L;
 
     private long salvagingDimmerSuppressedUntilMillis;
     private boolean dimmerSortingArmed = true;
@@ -207,6 +209,7 @@ public class SalvagingAfkTimerPlugin extends Plugin
     private long lastConfirmedSalvagingXpTick = Long.MIN_VALUE / 4;
     private long ignoreSalvageInventoryGainsUntilTick = Long.MIN_VALUE / 4;
     private long pendingJenkinsSignalUntilTick = Long.MIN_VALUE / 4;
+    private long lastCrewSalvageTick = Long.MIN_VALUE / 4;
 
     private long extractorReadyAtMillis;
     private boolean extractorStateInitialized;
@@ -585,6 +588,7 @@ public class SalvagingAfkTimerPlugin extends Plugin
         cargo.addCrewItem(ItemID.SAILING_SMALL_SHIPWRECK_SALVAGE, 1);
         int slotDelta = Math.max(0, cargo.getEstimatedUsed() - usedBefore);
         cargo.crewAddedSlots += slotDelta;
+        lastCrewSalvageTick = tickCounter;
         recordSignal("Crew added " + slotDelta + " salvage slot via " + source);
     }
 
@@ -1828,6 +1832,7 @@ public class SalvagingAfkTimerPlugin extends Plugin
         lastSailingXpDelta = 0;
         lastConfirmedSalvagingXpTick = Long.MIN_VALUE / 4;
         ignoreSalvageInventoryGainsUntilTick = Long.MIN_VALUE / 4;
+        lastCrewSalvageTick = Long.MIN_VALUE / 4;
         pendingJenkinsSignalUntilTick = Long.MIN_VALUE / 4;
         extractorReadyAtMillis = 0L;
         extractorStateInitialized = false;
@@ -2584,7 +2589,29 @@ public class SalvagingAfkTimerPlugin extends Plugin
             return true;
         }
 
+        if (playerActivity == PlayerActivity.IDLE && config.dimWhenCrewSalvaging())
+        {
+            return isCrewSalvaging() && !isCargoHoldAtUndimThreshold();
+        }
+
         return false;
+    }
+
+    private boolean isCrewSalvaging()
+    {
+        return tickCounter - lastCrewSalvageTick <= CREW_SALVAGING_WINDOW_TICKS;
+    }
+
+    private boolean isCargoHoldAtUndimThreshold()
+    {
+        int capacity = getCargoCapacity();
+        if (capacity <= 0)
+        {
+            return false;
+        }
+
+        int used = currentCargoState().getEstimatedUsed();
+        return used * 100 >= capacity * config.cargoHoldUndimPercent();
     }
 
     public long getSortingEtaRemainingMillis()
