@@ -124,11 +124,23 @@ public interface SalvagingAfkTimerConfig extends Config
     }
 
     @ConfigItem(
+            keyName = "dimWhenNoWrecks",
+            name = "Dim when no wrecks",
+            description = "Dims the screen while idle and no nearby wrecks are available, undimming when one respawns",
+            section = dimmerSection,
+            position = 6
+    )
+    default boolean dimWhenNoWrecks()
+    {
+        return false;
+    }
+
+    @ConfigItem(
             keyName = "undimSoonerWhenSorting",
             name = "Undim sooner when sorting",
             description = "Removes the dimmer when the sorting ETA reaches the configured threshold",
             section = dimmerSection,
-            position = 6
+            position = 7
     )
     default boolean undimSoonerWhenSorting()
     {
@@ -141,7 +153,7 @@ public interface SalvagingAfkTimerConfig extends Config
             name = "Sorting undim seconds",
             description = "Seconds remaining at which sorting should undim",
             section = dimmerSection,
-            position = 7
+            position = 8
     )
     default int sortingUndimSeconds()
     {
@@ -153,7 +165,7 @@ public interface SalvagingAfkTimerConfig extends Config
             name = "Unhide chat",
             description = "Leaves the chatbox visible while the rest of the screen is dimmed",
             section = dimmerSection,
-            position = 8
+            position = 9
     )
     default boolean unhideChat()
     {
@@ -165,7 +177,7 @@ public interface SalvagingAfkTimerConfig extends Config
             name = "Unhide interfaces",
             description = "Dims only the playable viewport and leaves all interfaces visible",
             section = dimmerSection,
-            position = 9
+            position = 10
     )
     default boolean unhideInterfaces()
     {

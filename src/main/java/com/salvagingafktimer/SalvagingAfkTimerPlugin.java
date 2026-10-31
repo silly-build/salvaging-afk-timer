@@ -2589,9 +2589,14 @@ public class SalvagingAfkTimerPlugin extends Plugin
             return true;
         }
 
-        if (playerActivity == PlayerActivity.IDLE && config.dimWhenCrewSalvaging())
+        if (playerActivity == PlayerActivity.IDLE)
         {
-            return isCrewSalvaging() && !isCargoHoldAtUndimThreshold();
+            if (config.dimWhenCrewSalvaging() && isCrewSalvaging() && !isCargoHoldAtUndimThreshold())
+            {
+                return true;
+            }
+
+            return config.dimWhenNoWrecks() && isWaitingForWreckRespawn();
         }
 
         return false;
@@ -2600,6 +2605,12 @@ public class SalvagingAfkTimerPlugin extends Plugin
     private boolean isCrewSalvaging()
     {
         return tickCounter - lastCrewSalvageTick <= CREW_SALVAGING_WINDOW_TICKS;
+    }
+
+    private boolean isWaitingForWreckRespawn()
+    {
+        // Only dim once nearby wrecks have been seen, so open water never dims.
+        return !getNearestWreckObservations(2).isEmpty() && getNearbyAvailableWreckCount() == 0;
     }
 
     private boolean isCargoHoldAtUndimThreshold()
